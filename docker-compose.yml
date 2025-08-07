@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  api-tests:
+    build: .
+    environment:
+      # API Configuration
+      - BASE_URL=${BASE_URL:-https://fakerestapi.azurewebsites.net}
+      
+      # Test Configuration
+      - TEST_PROFILE=${TEST_PROFILE:-all-tests}
+      - PARALLEL_THREADS=${PARALLEL_THREADS:-1}
+      
+      # Maven Configuration
+      - MAVEN_OPTS=-Xmx2g
+    volumes:
+      # Mount test reports directory
+      - ./reports:/app/reports
+      # Mount target directory for HTML reports
+      - ./target:/app/target
+    profiles:
+      - default
+      - happy-path
+      - edge-cases
+      - all-tests
+
+  # Service for running happy path tests only
+  happy-path-tests:
+    build: .
+    environment:
+      - BASE_URL=${BASE_URL:-https://fakerestapi.azurewebsites.net}
+      - TEST_PROFILE=happy-path
+      - PARALLEL_THREADS=${PARALLEL_THREADS:-1}
+    volumes:
+      - ./reports:/app/reports
+      - ./target:/app/target
+    profiles:
+      - happy-path
+
+  # Service for running edge case tests only
+  edge-cases-tests:
+    build: .
+    environment:
+      - BASE_URL=${BASE_URL:-https://fakerestapi.azurewebsites.net}
+      - TEST_PROFILE=edge-cases
+      - PARALLEL_THREADS=${PARALLEL_THREADS:-1}
+    volumes:
+      - ./reports:/app/reports
+      - ./target:/app/target
+    profiles:
+      - edge-cases
+
+  # Service for running all tests
+  all-tests:
+    build: .
+    environment:
+      - BASE_URL=${BASE_URL:-https://fakerestapi.azurewebsites.net}
+      - TEST_PROFILE=all-tests
+      - PARALLEL_THREADS=${PARALLEL_THREADS:-2}
+    volumes:
+      - ./reports:/app/reports
+      - ./target:/app/target
+    profiles:
+      - all-tests 

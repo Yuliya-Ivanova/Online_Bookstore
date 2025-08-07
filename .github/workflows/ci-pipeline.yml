@@ -1,0 +1,160 @@
+name: CI Pipeline with Allure Report
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  BASE_URL: https://fakerestapi.azurewebsites.net
+
+jobs:
+  test-and-generate-report:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: false
+        load: true
+        tags: bookstore-api-tests:${{ github.sha }}
+        
+    - name: Run tests and generate Allure report
+      env:
+        BASE_URL: ${{ env.BASE_URL }}
+      run: |
+        # Create directories for mounting
+        mkdir -p allure-results allure-report
+        
+        # Run tests in Docker container
+        docker run --rm \
+          -e BASE_URL=${{ env.BASE_URL }} \
+          -e TEST_TAGS='@happyPath or @edgeCases' \
+          -e TEST_RUNNER=TestRunner \
+          -e PARALLEL_THREADS=2 \
+          -v $(pwd)/allure-results:/app/allure-results \
+          -v $(pwd)/allure-report:/app/allure-report \
+          bookstore-api-tests:${{ github.sha }}
+          
+        # Generate Allure report locally if Docker didn't generate it
+        if [ ! -d "allure-report" ] || [ -z "$(ls -A allure-report 2>/dev/null)" ]; then
+          echo "Generating Allure report locally..."
+          
+          # Download and install Allure command line tool
+          curl -o allure-2.24.0.tgz -Ls https://repo.maven.apache.org/maven2/io/qameta/allure/allure-commandline/2.24.0/allure-commandline-2.24.0.tgz
+          tar -zxvf allure-2.24.0.tgz -C /opt/
+          ln -s /opt/allure-2.24.0/bin/allure /usr/local/bin/allure
+          
+          # Generate report if results exist
+          if [ -d "allure-results" ] && [ "$(ls -A allure-results)" ]; then
+            echo "Generating Allure report from results..."
+            allure generate allure-results --clean -o allure-report
+          else
+            echo "No Allure results found, creating fallback report..."
+            mkdir -p allure-report
+            echo '<!DOCTYPE html><html><head><title>Allure Report - No Results</title><style>body{font-family:Arial,sans-serif;margin:40px}.container{max-width:800px;margin:0 auto}.header{background:#f5f5f5;padding:20px;border-radius:5px}.content{margin-top:20px}</style></head><body><div class="container"><div class="header"><h1>📊 Allure Test Report</h1><p><strong>Status:</strong> No test results available</p><p><strong>Generated:</strong> $(date)</p></div><div class="content"><h2>No Test Results Found</h2><p>No Allure results were generated during test execution. This could be due to:</p><ul><li>Tests not running properly</li><li>Allure configuration issues</li><li>Docker container execution problems</li></ul><p>Please check the test execution logs for more details.</p></div></div></body></html>' > allure-report/index.html
+          fi
+        fi
+        
+        # Ensure allure-report directory exists and has content
+        if [ ! -d "allure-report" ]; then
+          mkdir -p allure-report
+        fi
+        
+        if [ -z "$(ls -A allure-report 2>/dev/null)" ]; then
+          echo "Creating final fallback report..."
+          echo '<!DOCTYPE html><html><head><title>Allure Report - Fallback</title><style>body{font-family:Arial,sans-serif;margin:40px}.container{max-width:800px;margin:0 auto}.header{background:#f5f5f5;padding:20px;border-radius:5px}.content{margin-top:20px}</style></head><body><div class="container"><div class="header"><h1>📊 Allure Test Report</h1><p><strong>Status:</strong> Fallback Report</p><p><strong>Generated:</strong> $(date)</p></div><div class="content"><h2>Fallback Report</h2><p>This is a fallback report generated when the main Allure report could not be created.</p><p>Please check the CI/CD pipeline logs for more information about test execution.</p></div></div></body></html>' > allure-report/index.html
+        fi
+        
+        echo "Final allure-report contents:"
+        ls -la allure-report/
+        echo "Allure report files:"
+        find allure-report -type f | head -10
+          
+    - name: Check artifacts before upload
+      if: always()
+      run: |
+        echo "Checking allure-results directory:"
+        ls -la allure-results/ || echo "allure-results directory not found"
+        
+        echo "Checking allure-report directory:"
+        ls -la allure-report/ || echo "allure-report directory not found"
+        
+        if [ -d "allure-results" ]; then
+          echo "Allure results files:"
+          find allure-results -type f | head -10
+        fi
+        
+        if [ -d "allure-report" ]; then
+          echo "Allure report files:"
+          find allure-report -type f | head -10
+        fi
+        
+    - name: Upload Allure results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: allure-results
+        path: allure-results
+        retention-days: 30
+        
+    - name: Upload Allure report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: allure-report
+        path: allure-report
+        retention-days: 30
+
+  deploy-to-github-pages:
+    runs-on: ubuntu-latest
+    needs: test-and-generate-report
+    if: always()
+    permissions:
+      pages: write
+      id-token: write
+      contents: read
+    
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Download Allure report
+      uses: actions/download-artifact@v4
+      with:
+        name: allure-report
+        path: allure-report
+        
+    - name: Setup Pages
+      uses: actions/configure-pages@v4
+      
+    - name: Upload to Pages
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: allure-report
+        
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
+      
+    - name: Show report link
+      run: |
+        echo "## 📊 Allure Report Deployed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**🌐 Live Report:** ${{ steps.deployment.outputs.page_url }}" >> $GITHUB_STEP_SUMMARY
+        echo "**📅 Deployed:** $(date)" >> $GITHUB_STEP_SUMMARY
+        echo "**🔗 Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
